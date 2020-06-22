@@ -1,0 +1,301 @@
+---
+title: "Building Map Reference of Admin 1"
+date: " `r format(Sys.Date(),  '%d %B %Y')`"
+always_allow_html: yes
+output:
+  html_document:
+    fig_caption: yes
+    fig_height: 5
+    fig_width: 8
+    toc: yes
+    toc_depth: 2
+    toc_float: yes
+    includes:
+       in_header: css/header.html
+---
+
+
+
+<link rel="stylesheet" href="css/unhcr-bootstrap.css">
+<link rel="stylesheet" href="css/style.css">
+<link rel="stylesheet" href="css/unhcr-header.css">
+
+
+# Building Map Reference of Admin 1
+
+```{r loaddata, message=FALSE, warning=FALSE}
+library("tidyverse")
+library("sf")
+library("rmapshaper")
+library("geojsonio")
+library("geojsonR")
+library("rgdal")
+library("readxl")
+library("spdplyr")
+library("lawn")
+library("ggspatial")
+
+mainDir <- getwd()
+mainDirroot <- substring(mainDir, 0 , nchar(mainDir) - 5)
+
+```
+
+
+## Checking map from mapping.unhcr.org
+
+```{r message=FALSE, comment = ""}
+rgn = read_sf( dsn = paste0(mainDirroot,"/data/Americas_Admin1"), "Americas_admin1")
+
+## Checking size of file
+pryr::object_size(rgn)
+
+## quite too big for easy computation
+
+## Trying to simplify it
+##rgn_simp = rmapshaper::ms_simplify(rgn, keep = 0.01) 
+
+## Command is failing because of not cleaned geometry... cf Panama for instance - overlapping polygon...
+```
+this is quite too heave for statistical mapping... Generating the nmap below takes a long time...
+
+```{r }
+ggplot(rgn) + 
+  geom_sf(color = "black", fill = "antiquewhite") + 
+  theme(panel.grid.major = element_line(color = gray(.5), 
+                                        linetype = 'dashed', size = 0.1), 
+        panel.background = element_rect(fill = "aliceblue")) +
+  xlab("Longitude") + ylab("Latitude") +
+  ggtitle("Admin 1 unit in Americas - mapping.unhcr.org ", 
+          subtitle = paste0("(",length(unique(rgn$pcode)), "  polygons )"))
+
+```
+
+## Let's extract the pcode that we need from this file
+
+```{r message=FALSE, comment = ""}
+
+rgndata <- as.data.frame(rgn[ , c("adm0name",   "iso3", "name", "pcode", "code_op" )])
+# names(rgndata)
+rgndata$geometry <- NULL
+# 
+write.csv(rgndata, paste0(mainDirroot,"/data/rgndata.csv"), row.names = FALSE)
+
+```
+
+
+## Getting data from Natural Earth
+
+```{r message=FALSE, comment = ""}
+tmp_dir = tempdir()
+tmp     = tempfile(pattern = "", tmpdir = tmp_dir, fileext = ".zip")
+
+download.file(
+    paste0(
+      "https://naciscdn.org/naturalearth/10m/cultural/",
+      "ne_10m_admin_1_states_provinces.zip"
+    ),
+    destfile = tmp
+)
+
+unzip(tmp, exdir = tmp_dir)
+
+#Read the shapefile:
+
+rgne = read_sf(tmp_dir, "ne_10m_admin_1_states_provinces")
+## Checking size of file
+pryr::object_size(rgne)
+
+## a lot better!!
+```
+
+
+## Clip to the Americas
+
+```{r message=FALSE, comment = ""}
+
+#view(lawn_bbox_polygon(c(-170, -60, -30, 170)))
+
+rgne_clipped <- rmapshaper::ms_clip(rgne, bbox = c(-170, -60, -30, 170))
+
+
+
+nrow(rgne_clipped)
+
+pryr::object_size(rgne_clipped)
+```
+
+```{r}
+ggplot(rgne_clipped) + 
+  geom_sf(color = "black", fill = "antiquewhite") + 
+  theme(panel.grid.major = element_line(color = gray(.5), 
+                                        linetype = 'dashed', size = 0.1), 
+        panel.background = element_rect(fill = "aliceblue")) +
+  xlab("Longitude") + ylab("Latitude") +
+  ggtitle("Admin 1 unit in Americas - Natural Earth", 
+          subtitle = paste0("(",length(unique(rgn$pcode)), "  polygons )"))
+
+```
+
+## Remove countries from pacific
+
+```{r }
+
+ctry2 <- as.data.frame(unique(rgne_clipped[ ,c( "adm0_a3",  "admin"  )]))
+ctry2$geometry <- NULL
+ctry2 <- as.data.frame(unique(ctry2[ ,c( "adm0_a3",  "admin"  )]))
+
+rgne_clipped <- rgne_clipped[ !(rgne_clipped$adm0_a3 %in% c("NIU", "ASM", "CLP", "COK", "PYF", "GRL" )), ]
+
+ggplot(rgne_clipped) + 
+  geom_sf(color = "black", fill = "antiquewhite") + 
+  theme(panel.grid.major = element_line(color = gray(.5), 
+                                        linetype = 'dashed', size = 0.1), 
+        panel.background = element_rect(fill = "aliceblue")) +
+  xlab("Longitude") + ylab("Latitude") +
+  ggtitle("Admin 1 unit in Americas - Natural Earth", 
+          subtitle = paste0("(",length(unique(rgn$pcode)), "  polygons )"))
+```
+
+
+## getting var to do the join
+
+```{r message=FALSE, comment = ""}
+
+## Extract name to do the join
+rgne_clipped_data <- as.data.frame(unique(rgne_clipped[ ,c("iso_3166_2",  "adm1_code" , "name", "name_alt", "name_local", "woe_name" ,  "gn_name" , "gns_name", "adm0_a3",  "adm0_label"  )]))
+rgne_clipped_data$geometry <- NULL
+rgne_clipped_data <- as.data.frame(unique(rgne_clipped_data[ ,c("iso_3166_2", "adm1_code" ,"name", "name_alt", "name_local","woe_name" ,  "gn_name" , "gns_name", "adm0_a3",  "adm0_label"   )]))
+```
+
+## Testing the join 
+
+```{r message=FALSE, comment = ""}
+
+rgndata2 <- merge( x = rgndata  , y = rgne_clipped_data , by= "name")
+nrow(rgndata2)
+
+### Does not work - let's save it and do the mapping a la mano... sigh...
+write.csv(rgne_clipped_data, paste0(mainDirroot,"/data/rgne_clipped_data.csv"), row.names = FALSE)
+
+## Reading the mapping table
+mappingpcode <- read.csv(paste0(mainDirroot,"/data/mappingpcode.csv"))
+
+```
+## Merging with pcode and office
+
+```{r message=FALSE, comment = ""}
+rgne_clipped_pcode <- merge (x = rgne_clipped, y = mappingpcode , by = "adm1_code" ,all.x= TRUE)
+
+pryr::object_size(rgne_clipped_pcode)
+
+## Check percent matching
+nrow(rgne_clipped_pcode[!(is.na(rgne_clipped_pcode$pcode)), ]) 
+nrow(rgne_clipped_pcode[!(is.na(rgne_clipped_pcode$pcode)), ]) / nrow(rgne_clipped_pcode)
+
+```
+So we went from 279Mb to 7 Mb 
+
+## Saving file to GeoJson format
+
+```{r message=FALSE, comment = ""}
+
+rgne_clipped_pcode_json <- geojsonio::geojson_json(rgne_clipped_pcode)
+geojsonio::geojson_write(rgne_clipped_pcode_json, 
+                         file = paste0(mainDirroot,"/data/america_adm1.geojson"))
+```
+
+## Now let's simplify
+
+```{r message=FALSE, comment = ""}
+rgne_clipped_pcode_simp = rmapshaper::ms_simplify(rgne_clipped_pcode, keep = 0.5)
+nrow(rgne_clipped_pcode_simp[!(is.na(rgne_clipped_pcode_simp$pcode)), ]) 
+pryr::object_size(rgne_clipped)
+
+```
+
+
+
+## Saving file to GeoJson format
+
+```{r message=FALSE, comment = ""}
+
+rgne_clipped_pcode_simp_json <- geojsonio::geojson_json(rgne_clipped_pcode_simp)
+geojsonio::geojson_write(rgne_clipped_pcode_simp_json, 
+                         file = paste0(mainDirroot,"/data/america_simpadm1.geojson"))
+```
+
+## Check projection and transform to bind for comparison
+
+```{r message=FALSE, comment=}
+st_crs(rgn)
+
+st_crs(rgne_clipped_pcode)
+
+rgn2 <- st_transform(rgn, crs =  4326)
+
+```
+
+## Merge.
+
+```{r message=FALSE, comment=}
+rgn2$simplified <- "Original"
+rgne_clipped_pcode$simplified      = "Clean-from-NE"
+rgne_clipped_pcode_simp$simplified = "Simplified-with-Pcode"
+
+
+rgne = reduce(
+  list( 
+        rgne_clipped_pcode[, c("name", "pcode","simplified")],
+        #rgn2[, c("name", "pcode", "simplified")],
+        rgne_clipped_pcode_simp[, c("name", "pcode","simplified")]),
+  rbind
+)
+# rgne = bind_rows(
+#    rgn2[, c("name", "pcode", "simplified")], 
+#         rgne_clipped_pcode[, c("name", "pcode","simplified")], 
+#         rgne_clipped_pcode_simp[, c("name", "pcode","simplified")])
+
+```
+
+
+
+```{r }
+ggplot(rgne) + 
+  geom_sf(color = "black", fill = "antiquewhite") + 
+  facet_wrap( ~ simplified) +
+  
+  theme(panel.grid.major = element_line(color = gray(.5), 
+                                        linetype = 'dashed', size = 0.1), 
+        panel.background = element_rect(fill = "aliceblue")) +
+  #coord_map("conic", lat0 = 30) +
+  
+  #theme_minimal() +
+  annotation_scale(location = "bl", width_hint = 0.5) +
+  annotation_north_arrow(location = "bl", which_north = "true", 
+        pad_x = unit(0.75, "in"), pad_y = unit(0.5, "in"),
+        style = north_arrow_fancy_orienteering) +
+  xlab("Longitude") + ylab("Latitude") +
+  ggtitle("Admin 1 unit in Americas", 
+          subtitle = paste0("(",length(unique(rgne_clipped_pcode$pcode)), " to ", length(unique(rgne_clipped_pcode_simp$pcode)), " polygons )"))
+
+```
+
+## Details
+
+```{r }
+
+ggplot(rgne) + 
+  geom_sf(color = "black", fill = "lightgreen") + 
+  facet_wrap( ~ simplified) +
+  theme_minimal() +
+  annotation_scale(location = "bl", width_hint = 0.5) +
+  annotation_north_arrow(location = "bl", which_north = "true", 
+        pad_x = unit(0.2, "in"), pad_y = unit(0.2, "in"),
+        style = north_arrow_fancy_orienteering) +
+  xlab("Longitude") + ylab("Latitude") +
+  ggtitle("Admin 1 unit in Central Americas") +
+  coord_sf(xlim = c(-95, -75), ylim = c(7, 17), expand = FALSE)
+
+```
+
+

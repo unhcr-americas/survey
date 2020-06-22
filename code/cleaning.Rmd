@@ -1,0 +1,751 @@
+---
+title: "Data Cleaning Steps"
+date: " `r format(Sys.Date(),  '%d %B %Y')`"
+always_allow_html: yes
+output:
+  html_document:
+    fig_caption: yes
+    fig_height: 5
+    fig_width: 8
+    toc: yes
+    toc_depth: 2
+    toc_float: yes
+    includes:
+       in_header: css/header.html
+---
+
+
+
+<link rel="stylesheet" href="css/unhcr-bootstrap.css">
+<link rel="stylesheet" href="css/style.css">
+<link rel="stylesheet" href="css/unhcr-header.css">
+
+
+# Data Cleaning Review
+
+```{r loaddata, message=FALSE, warning=FALSE}
+library(readr)
+library(readxl)
+library(dplyr)
+library(stringr)
+library(scales)
+library(classInt)
+library(ggplot2)
+library(ggrepel)
+
+mainDir <- getwd()
+mainDirroot <- substring(mainDir, 0 , nchar(mainDir) - 5)
+MainDataFrame <- read_delim(paste0(mainDirroot,"/data/MainDataFrame_raw.csv"),";", escape_double = FALSE, col_types = cols(today = col_date(format = "%Y-%m-%d")), trim_ws = TRUE)
+```
+
+
+## Counting initial # of Records
+
+```{r message=FALSE, comment = ""}
+nrow(MainDataFrame)
+```
+
+
+## Remove incomplete records
+
+```{r message=FALSE, comment = ""}
+MainDataFrame <- MainDataFrame[ !(is.na(MainDataFrame$end_mins1)) ,  ]
+nrow(MainDataFrame)
+
+```
+
+
+## Remove non-piloting countries
+
+```{r message=FALSE, comment = ""}
+
+## Look at all country
+#table(MainDataFrame$monit.progres_CountryofAsylum, useNA = "ifany")
+#######
+ctry <- as.data.frame(levels(as.factor(MainDataFrame$monit.progres_CountryofAsylum)))
+names(ctry) <- "country"
+
+## Keep only the pilot countries
+ctry <- as.data.frame(ctry[ ctry$country %in% c("Argentina",
+                                                # "Aruba",
+                                                #  "Belize",
+                                                "Chile",
+                                                "Ecuador",
+                                                # "Guatemala",
+                                                #  "notsaid",
+                                                # "Panama",
+                                                "Peru",
+                                                "RepublicaDominicana"), ])
+names(ctry) <- "country"
+#names(MainDataFrame)
+
+MainDataFrame <- MainDataFrame[MainDataFrame$monit.progres_CountryofAsylum %in% as.character(ctry$country),  ]
+cat("check after cleaning")
+table(MainDataFrame$monit.progres_CountryofAsylum, useNA = "ifany")
+nrow(MainDataFrame)
+
+```
+
+## Remove testing data
+
+```{r message=FALSE, comment = ""}
+## For Peru,  remove any date before 20-22 May (any date before this is a test)
+# Number of records in the main data frame: 141 – total # of records is 136 (see bullet points #2 and #3)
+# Period of data collection: between 2020-05-13 and 2020-05-23 – Period us between 20 and 26 May (any date prior is a test, the record submitted on 26 may was a whatsapp questionnaire)
+
+##check that date are correctly recognized
+#str(MainDataFrame$today) 
+#str(MainDataFrame$start) 
+
+MainDataFrame2 <- MainDataFrame[ (MainDataFrame$monit.progres_CountryofAsylum == "Peru" & 
+                                 MainDataFrame$start < "2020-05-20") ,  ]
+#  tests interviews were done on 14 and 15 May in Peru
+table(MainDataFrame2$monit.progres_CountryofAsylum, MainDataFrame2$start , useNA = "ifany")
+
+## Cleam from workpsace
+rm(MainDataFrame2)
+## We remove with ! for exclude
+MainDataFrame <- MainDataFrame[ !(MainDataFrame$monit.progres_CountryofAsylum == "Peru" & 
+                                    MainDataFrame$start < "2020-05-20") ,  ]
+
+nrow(MainDataFrame)
+```
+## Remove if not crossed a border
+
+```{r message=FALSE, comment = ""}
+MainDataFrame <- MainDataFrame[ which(MainDataFrame$monit.crossedborder == "yes")  ,  ]
+nrow(MainDataFrame)
+
+```
+
+
+## Saving raw data per country
+
+```{r message=FALSE, comment = ""}
+for (i in 1:nrow(ctry)) {
+  ctryfilter <- as.character(ctry[ i , 1])
+  MainDataFramesplit <- MainDataFrame[MainDataFrame$monit.progres_CountryofAsylum == ctryfilter,  ]
+  write.csv(MainDataFramesplit, paste0(mainDirroot,"/data/MainDataFrame-",ctryfilter,"-raw.csv"), row.names = FALSE)
+}
+
+```
+
+## Attention question
+
+The attention was set up to ensure respondent are correctly reading questions
+
+```{r message=FALSE, comment = ""}
+
+table(MainDataFrame$attentionpass, useNA = "ifany")
+
+# MainDataFrame <- MainDataFrame[ which(MainDataFrame$attentionpass == "Yes")  ,  ]
+# nrow(MainDataFrame)
+```
+
+## Arrived before departed
+
+This shall probably requires a new specific constraint in the collection 
+
+Note that monit.checktimediff is counted on days while other are months 
+
+```{r message=FALSE, comment = ""}
+
+#	Check column AF “time in transit”… column AD is time since leaving the country (see highlighted example: the person left in 2016, thus 45 months),
+#column AE is time in current location (Peru. E.g 25 months) while column AF is time in transit (590 months? days?). Important to put the measuring unit in the SOP  
+# Months in transit – has negative number
+## Check if arrived is before depart
+MainDataFrame$Departbeforearrived <-  ifelse(MainDataFrame$monit.ArriveHere >= MainDataFrame$monit.DepartureDate, "Yes", "No" )
+
+table(MainDataFrame$Departbeforearrived, useNA = "ifany")
+
+
+head(MainDataFrame[ MainDataFrame$Departbeforearrived == "No" ,c( "monit.ArriveHere", "monit.DepartureDate", 
+          "monit.TimeStayHere", #round((decimal-date-time(${today}) - decimal-date-time(${ArriveHere})) div 30.45, 0)
+          "monit.TimeDeparted"  , #round((decimal-date-time(${today}) - decimal-date-time(${DepartureDate})) div 30.45, 0)
+          "monit.checktimediff"  #decimal-date-time(${ArriveHere}) - decimal-date-time(${DepartureDate})
+                       )], 10)
+MainDataFrame <- MainDataFrame[ which(MainDataFrame$Departbeforearrived == "Yes")  ,  ]
+
+nrow(MainDataFrame)
+```
+
+# Household size calculation
+
+```{r message=FALSE, comment = ""}
+
+# View(MainDataFrame[ ,c("monit.progres_groupsize",                                                 
+#                       "monit.a.b.checktotal",                                         
+#                       "monit.a.progres_TotalAdult", 
+#                       
+#                       "monit.a.progres_TotalAdultFemale",                                  
+#                       "monit.a.progres_TotalAdultMale",                                     
+#                       "monit.a.checkadult",      
+
+## coalesce(${progres_totaladultfemale1859},0)+coalesce(${progres_totaladultfemale60},0)+coalesce(${progres_totaladultmale1859},0)+coalesce(${progres_totaladultmale60},0)
+
+#                       "monit.a.b.checkadult1",       
+#                                                                                                      
+#                       "monit.a.progres_TotalMinor",          
+#                       "monit.a.progres_TotalMinorFemale",                                  
+#                       "monit.a.progres_TotalMinorMale",                                
+#                       "monit.a.checkminor1",                                                 
+#                       "monit.a.b.checkminor",                                              
+#                       "monit.a.b.checkminor2",                
+#                       
+#                       "monit.a.progres_totaladultfemale1859",                              
+#                       "monit.a.progres_totaladultfemale60",                                
+#                       "monit.a.progres_totaladultmale1859",                                
+#                       "monit.a.progres_totaladultmale60",                      
+#                       "monit.a.progres_totalminorfemale04",                                
+#                       "monit.a.progres_totalminorfemale511",                               
+#                       "monit.a.progres_totalminorfemale1214",                              
+#                       "monit.a.progres_totalminorfemale1517",                              
+#                       "monit.a.progres_totalminormale04",                                  
+#                       "monit.a.progres_totalminormale511",                                 
+#                       "monit.a.progres_totalminormale1214",                                
+#                       "monit.a.progres_totalminormale1517",                               
+#                       "monit.a.couldwork"   
+#                       )])
+
+# Calculation check – checkminor – review the flag in raw data
+#  the sum of adults and children is 560 while the total number of people in the HHs is 557
+# The sum of boys and girls does not add up. 
+# Check potential for error in the total # of girls and boys.  
+# When adding up the age groups for girls, we get a total of 120 girls while the real number is 116. 
+# This could be due to mistakes while filling up the questionnaire. 
+# Worth reviewing. When adding up the age groups for boys, the total is 117 but should be 122.  
+# Overall, it is important to check the sequence/flags/totals of men, women, girls and boys
+
+```
+
+## Check if sum is matching
+
+```{r message=FALSE, comment = ""}
+## Check adult is matching
+MainDataFrame$summatching <-  ifelse(MainDataFrame$monit.progres_groupsize == MainDataFrame$monit.a.checkadult + MainDataFrame$monit.a.checkminor1, "Yes", "No" )
+
+table(MainDataFrame$summatching , useNA = "ifany")
+
+```
+
+```{r message=FALSE, comment = ""}
+
+MainDataFrame$summatchinggap <-  MainDataFrame$monit.progres_groupsize - MainDataFrame$monit.a.checkadult - MainDataFrame$monit.a.checkminor1
+
+table(MainDataFrame$summatchinggap , useNA = "ifany")
+
+```
+
+
+## Check adult sum is matching
+
+```{r message=FALSE, comment = ""}
+## Check adult is matching
+MainDataFrame$adultmatching <-  ifelse(MainDataFrame$monit.a.progres_TotalAdult == MainDataFrame$monit.a.checkadult, "Yes", "No" )
+
+table(MainDataFrame$adultmatching , useNA = "ifany")
+
+```
+
+```{r message=FALSE, comment = ""}
+
+MainDataFrame$adultmatchinggap <-  MainDataFrame$monit.a.progres_TotalAdult - MainDataFrame$monit.a.checkadult
+
+table(MainDataFrame$adultmatchinggap , useNA = "ifany")
+
+```
+
+
+## Check minor sum is matching
+
+```{r message=FALSE, comment = ""}
+## Check adult is matching
+MainDataFrame$minortmatching <-  ifelse(MainDataFrame$monit.a.progres_TotalMinor == MainDataFrame$monit.a.checkminor1, "Yes", "No" )
+
+table(MainDataFrame$minortmatching , useNA = "ifany")
+
+```
+```{r message=FALSE, comment = ""}
+
+MainDataFrame$minormatchinggap <-  MainDataFrame$monit.a.progres_TotalMinor - MainDataFrame$monit.a.checkminor1
+
+table(MainDataFrame$minormatchinggap , useNA = "ifany")
+
+```
+
+## Check double non matching
+
+```{r message=FALSE, comment = ""}
+
+table(MainDataFrame$adultmatching, MainDataFrame$minortmatching , useNA = "ifany")
+
+```
+
+## Remove double non matching
+
+```{r message=FALSE, comment = ""}
+
+MainDataFrame <- MainDataFrame[ which(MainDataFrame$adultmatching == "Yes" &
+                                       MainDataFrame$minortmatching == "Yes" ), ]
+
+nrow(MainDataFrame)
+
+```
+
+## Filling admin 1 based on coordinates
+
+For those who shared precise location
+
+```{r message=FALSE, comment = ""}
+
+#monit.progres_CoAadmin1
+# "monit.shareloc"                                                    
+# "location"                                                          
+# "monit._location_latitude"                                          
+# "monit._location_longitude" 
+
+
+
+```
+
+
+
+# Addressing issue with or_other
+
+There is an issue in kobo  when using the or_other - the variable is set to NA - and the automatically offers field  specify is not compulsory  so we replace all NA by other 
+
+## Protection incidents
+
+ 
+
+```{r message=FALSE, comment = ""}
+
+# Out of the 40 interviews that reported having suffered protection incidents, 7 did not mention what type of protection incident. 
+# Since the question of types of protection incidents is mandatory 
+# when interviewees answer that they did suffer protection incidents, would this be an issue with the Kobo form? 
+# Only 1 of these 7 records had the place where the incident happened. 
+
+table(MainDataFrame[ (is.na(MainDataFrame$monit.RouteIncidentType) & 
+                        MainDataFrame$monit.RouteIncident =="yes" ), 
+                     c("monit.progres_CountryofAsylum")], useNA = "ifany")   
+
+MainDataFrame$monit.RouteIncidentType[ (is.na(MainDataFrame$monit.RouteIncidentType) &  MainDataFrame$monit.RouteIncident =="yes" )] <- "other"
+ 
+```
+##	Documentation
+
+Same issue 
+
+This needs more investigation - what were mostly the "other" that were offered as options form the question?
+
+```{r message=FALSE, comment = ""}
+
+###	Documentation: 
+
+table(MainDataFrame$monit.documentation, useNA = "ifany")
+
+cat("Breakdown of other per country")
+table(MainDataFrame[ is.na(MainDataFrame$monit.documentation), c("monit.progres_CountryofAsylum")], useNA = "ifany")  
+
+MainDataFrame$monit.documentation[ (is.na(MainDataFrame$monit.documentation)  )] <- "other"
+
+# table(MainDataFrame$monit.documentation, MainDataFrame$monit.progres_CountryofAsylum, useNA = "ifany")    
+# table(MainDataFrame[ is.na(MainDataFrame$monit.documentation), c("final.accessq")], useNA = "ifany") 
+
+```
+
+## Question on type of permit
+
+same issue on other..
+
+```{r message=FALSE, comment = ""}
+
+MainDataFrame$monit.docResidence[ (is.na(MainDataFrame$monit.docResidence)  )] <- "other"
+table(MainDataFrame$monit.docResidence, MainDataFrame$monit.progres_CountryofAsylum, useNA = "ifany")   
+
+# Specific types of permits for Peru are not appearing in the dataset. Although we understand the categories,
+# if you are going to create categories for multiple countries, it would be important to put what is equivalent to what in an annex in the SOP.
+
+```
+
+
+## Question  SocialBenefit
+ 9/16. Are you currently receiving some social protection (cash allowance) in the place where you are staying now?"
+Many other there as well!
+ 
+```{r message=FALSE, comment = ""} 
+# Question 9/16:SocialBenefit
+
+MainDataFrame$VulnerabilityScoring.CopingCapacity.SocialBenefit[ (is.na(MainDataFrame$VulnerabilityScoring.CopingCapacity.SocialBenefit)  )] <- "other"
+table(MainDataFrame$VulnerabilityScoring.CopingCapacity.SocialBenefit, MainDataFrame$monit.progres_CountryofAsylum, useNA = "ifany") 
+
+#table(MainDataFrame$VulnerabilityScoring.CopingCapacity.SocialBenefit, useNA = "ifany")
+# <NA>    151 
+```
+
+## Question on coping mechanisms
+
+```{r message=FALSE, comment = ""}
+# Question on coping mechanisms: only 123 out of 127 answers. This question was mandatory
+#table(MainDataFrame$VulnerabilityScoring.CopingCapacity.CopingMechanism, useNA = "ifany")
+## <NA> 147
+
+MainDataFrame$VulnerabilityScoring.CopingCapacity.CopingMechanism[ (is.na(MainDataFrame$VulnerabilityScoring.CopingCapacity.CopingMechanism)  )] <- "other"
+#table(MainDataFrame$VulnerabilityScoring.CopingCapacity.CopingMechanism, MainDataFrame$monit.progres_CountryofAsylum, useNA = "ifany") 
+
+
+table(MainDataFrame[ MainDataFrame$VulnerabilityScoring.CopingCapacity.CopingMechanism == "other", c("monit.progres_CountryofAsylum")], useNA = "ifany")   
+
+  
+```
+
+# Question CopingCapacity: statushead calculation
+
+This question was asked only on those who made gave a consent for scoring
+
+
+Note that the question is raised only for those who have shared consent for scoring
+
+```{r message=FALSE, comment = ""}
+# Column VulnerabilityScoring.CopingCapacity.statushead  
+table(MainDataFrame$VulnerabilityScoring.CopingCapacity.statushead, MainDataFrame$ConsentScore, useNA = "ifany")
+
+```
+
+```{r message=FALSE, comment = ""}
+table(MainDataFrame$monit.progres_CountryofAsylum, MainDataFrame$ConsentScore, useNA = "ifany")
+```
+
+Check Result calculation
+
+
+> if((${ageRange}='15-17' or ${ageRangeother}= '15-17'),
+>    'child',
+>    if((${ageRange}='over60' or
+>        ${ageRangeother}='over60' or
+>        selected(${SpecificNeeds}, 'disability') or
+>        selected(${SpecificNeeds},'treatment') or
+>        selected(${SpecificNeeds},'elderly')), 
+>        'elderly-or-disabled',
+>          if((${progres_Sex}='female' or ${progres_Sexother}='female'),
+>             'female',
+>             if((${maritalStatus}='single' or
+>              ${maritalStatusother}='single' or
+>              ${maritalStatus}='widow' or
+>              ${maritalStatusother}='widow' or
+>              ${maritalStatus}='divorced' or
+>              ${maritalStatusother}='divorced'),
+>              'single',
+>             'male'))))
+
+```{r message=FALSE, comment = ""}
+
+## Look at 10 lines
+MainDataFrame[ 1-10,
+                     c( "VulnerabilityScoring.CopingCapacity.statushead",
+                        "monit.SpecificNeeds", 
+                        "VulnerabilityScoring.CopingCapacity.maritalStatus",
+                        "VulnerabilityScoring.CopingCapacity.maritalStatusother",
+                        "VulnerabilityScoring.CopingCapacity.ageRange"  , 
+                        "VulnerabilityScoring.CopingCapacity.ageRangeother" ,  
+                        "VulnerabilityScoring.CopingCapacity.progres_Sex" ,  
+                        "VulnerabilityScoring.CopingCapacity.progres_Sexother"   )]
+
+```
+
+# Final Dataset
+
+## Data collection channel per country
+
+```{r message=FALSE, comment = ""}
+table(MainDataFrame$monit.progres_CountryofAsylum, MainDataFrame$final.accessq, useNA = "ifany")
+
+```
+
+## Saving cleaned data per country
+
+```{r message=FALSE, comment = ""}
+for (i in 1:nrow(ctry)) {
+  ctryfilter <- as.character(ctry[ i , 1])
+  MainDataFramesplit <- MainDataFrame[MainDataFrame$monit.progres_CountryofAsylum == ctryfilter,  ]
+  write.csv(MainDataFramesplit, paste0(mainDirroot,"/data/MainDataFrame-",ctryfilter,"-cleaned.csv"), row.names = FALSE)
+}
+
+```
+
+
+# Data Weighting
+
+```{r message=FALSE, comment = ""}
+### Create weights. Values taken from popdata. 
+
+# Since sampling was done on households, I estimate the number of households looking at average household size.
+avg_hh_size <- mean(MainDataFrame$monit.progres_groupsize, na.rm = TRUE)
+
+# get number of records
+n_records <- nrow(MainDataFrame)
+
+MainDataFrame$country <- MainDataFrame$monit.progres_CountryofAsylum
+
+# create weights
+MainDataFrame <- mutate(MainDataFrame, 
+                        weight = case_when(
+                          country == "Argentina" ~ (185711 / avg_hh_size) / n_records,
+                          #country == "aruba" ~ (17008 / avg_hh_size) / n_records,
+                          #country == "brazil" ~ (363676 / avg_hh_size) / n_records,
+                          country == "Chile" ~ (465383 / avg_hh_size) / n_records,
+                          #country == "colombia" ~ (2181002 / avg_hh_size) / n_records, 
+                          #country == "costa_rica" ~ (114304 / avg_hh_size) / n_records,
+                          country == "Ecuador" ~ (453694 / avg_hh_size) / n_records,
+                          #country == "guatemala" ~ (111648 / avg_hh_size) / n_records,
+                          #country == "honduras" ~ (6186 / avg_hh_size) / n_records,
+                          #country == "panama" ~ (136007 / avg_hh_size) / n_records,
+                          country == "Peru" ~ (867821 / avg_hh_size) / n_records,
+                          country == "RepublicaDominicana" ~ (34549 / avg_hh_size) / n_records #,
+                          #country == "trinidad_y_tobago" ~ (27552 / avg_hh_size) / n_records,
+                          #country == "uruguay" ~ (28630 / avg_hh_size) / n_records,
+                          #country == "venezuela" ~ (503444 / avg_hh_size) / n_records
+                          )
+)
+
+table(MainDataFrame$weight, MainDataFrame$country, useNA = "ifany")
+
+```
+
+
+# Anonymisation
+
+
+```{r message=FALSE, comment = ""}
+
+library(sdcMicro)
+
+# identify obs with highest individual risk
+risky_observations <- function(sdc_obj, risk_threshold, vars_selected){
+  observations <- extractManipData(sdc_obj)[vars_selected]
+  individual_risks <- sdc_obj@risk$individual
+  observations <- cbind(observations, individual_risks)
+  observations <- observations[observations$risk >= risk_threshold, ]
+  observations <- observations[order(observations$risk, decreasing = TRUE) , ]
+  observations$risk <- percent(observations$risk, accuracy=0.001)
+  observations$hier_risk <- percent(observations$hier_risk, accuracy=0.001)
+  return (observations)
+}
+
+```
+
+## Removing identifiers
+
+```{r message=FALSE, comment = ""}
+
+# create year and month of monitoring, remove exact date as it may lead to disclosure
+MainDataFrame$year_of_monitoring <- substr(MainDataFrame$today, 7, 10)
+MainDataFrame$month_of_monitoring <- substr(MainDataFrame$today, 4, 5)
+
+MainDataFrame$submission_id <- MainDataFrame$"_id"
+
+# remove variables that are notes, intermediairy calculation too sensitive or potential identifiers...
+variables_to_remove <- c(
+ "start",                                                             
+  "end",                                                               
+  "today",                                                               
+  "deviceid",                                                          
+  "subscriberid",                                                      
+  "simserial",                                                         
+  "phonenumber",                                                       
+  "username",                                                          
+  "email",                                                             
+  "start_mins",                                                        
+  "end_mins1",                                                         
+  "survey_mins1",                                                      
+  "end_mins3",                                                         
+  "survey_mins3",                                                      
+  "end_mins4",                                                         
+  "survey_mins4",                                                      
+  "logo",                                                              
+  "ConsentInterview2",                                                 
+  "ConsentInterview1",                                                 
+  "screen.YesDisplaced",                                               
+  "screen.DisplacedNo",                                                
+  "screen.YesOver15",                                                  
+  "screen.Over15No",                                                   
+  "screen.ConsentIInterview3",                                         
+  "screen.Consent",                                                    
+  "monit.crossedborder" ,
+ "monit.DepartureDate" ,                                              
+ "monit.DepartureDateIDP",                                            
+ "monit.ArriveHere",
+  "monit.Monthhere" ,
+ 
+  "monit.a.checkadult", 
+  "monit.a.checkminor1",                                               
+  "monit.a.couldwork",                                                 
+  "monit.a.b.checktotal",                                              
+  "monit.a.b.checkadult1",                                             
+  "monit.a.b.checkminor",                                              
+  "monit.a.b.checkminor2", 
+
+ "monit.progres_CountryofAsylum1", 
+ "monit.progres_CountryofAsylum2" , 
+ "monit._location_latitude",                                          
+ "monit._location_longitude",                                         
+ "monit._location_altitude",                                          
+ "monit._location_precision" ,   
+ "monit.MonitoringCityTown" ,
+ "ConsentScore",                                                      
+  "needassistno" ,
+ "VulnerabilityScoring.vulnote" ,
+  "VulnerabilityScoring.WellBeing.attentioncheck",
+ "VulnerabilityScoring.ConsentReg" ,                                  
+  "VulnerabilityScoring.ConsentRegNo", 
+  "preregister.noteregister",                                          
+  "preregister.progres_givenname",                                     
+  "preregister.progres_familyname",                                    
+  "preregister.progres_dateofbirth",                                   
+ "preregister.progres_phonenumber",                                   
+ "preregister.phone_type",                                            
+ "preregister.whatsapp",                                              
+"preregister.formid",                                                
+ "preregister.notreg",                                                
+ "final.othercoment",                                                 
+ "final.notefin",                                                   
+ "final.codepartner",   
+ "attentionpass",                                                     
+ "_id",                                                               
+ "_uuid",                                                             
+ "_submission_time",                                                  
+ "_validation_status",                                                
+ "_index", 
+"basicneedsMeals",                                                   
+ "basicneedsShelter",                                                 
+ "basicneedsWater",                                                   
+ "basicneedsBathroom",                                                
+ "basicneedsElectricity",                                             
+ "basicneeds",                                                        
+ "basicneedsscore",                                                   
+ "copingHHHead",                                                      
+ "copingDependency",                                                  
+ "copingDisability",                                                  
+ "copingWork",                                                        
+ "copingNegmechanism",                                                
+ "coping",                                                            
+ "copingscore",                                                       
+ "wellbeingSafety",                                                   
+ "wellbeingDocumentation",                                            
+ "wellbeingCommunication",                                            
+ "wellbeingIsolation",                                                
+ "wellbeing",                                                         
+ "wellbeingscore"  
+)
+MainDataFrame2 <- select(MainDataFrame, - all_of(variables_to_remove))
+```
+
+## Defining key variables
+
+```{r message=FALSE, comment = ""}
+
+# define key variables for disclosure scenario
+key_variables <- c(
+
+  "monit.nationality",                                                 
+ "monit.progres_CountryofAsylum", 
+"monit.progres_CoAadmin1" ,
+
+  "monit.TimeDeparted",                                                
+  "monit.TimeStayHere",                                                
+  "monit.checktimediff",  
+  
+  
+  "monit.progres_groupsize" ,                                          
+  "monit.a.progres_TotalAdult",                                        
+  "monit.a.progres_TotalAdultFemale",                                  
+  "monit.a.progres_TotalAdultMale",                                    
+  "monit.a.progres_totaladultfemale1859",                              
+  "monit.a.progres_totaladultfemale60",                                
+  "monit.a.progres_totaladultmale1859",                                
+  "monit.a.progres_totaladultmale60",                                 
+  "monit.a.progres_TotalMinor",                                        
+  "monit.a.progres_TotalMinorFemale",                                  
+  "monit.a.progres_TotalMinorMale",                                    
+  "monit.a.progres_totalminorfemale04",                                
+  "monit.a.progres_totalminorfemale511",                               
+  "monit.a.progres_totalminorfemale1214",                              
+  "monit.a.progres_totalminorfemale1517",                              
+  "monit.a.progres_totalminormale04",                                  
+  "monit.a.progres_totalminormale511",                                 
+  "monit.a.progres_totalminormale1214",                                
+  "monit.a.progres_totalminormale1517", 
+ 
+  "monit.householdLeftbehind",
+  "monit.prevdeport" ,
+  
+    "monit.intentionspctr" ,                                             
+  "monit.intentionsptown" ,
+  "monit.SpecificNeeds" ,                                              
+  "monit.SpecificNeeds.disability",                                    
+  "monit.SpecificNeeds.treatment",                                     
+  "monit.SpecificNeeds.treatmentyesaccess",                            
+  "monit.SpecificNeeds.unacompanied",                                  
+  "monit.SpecificNeeds.elderly",                                       
+  "monit.SpecificNeeds.pregnant",                                      
+  "monit.SpecificNeeds.lactating",                                     
+  "monit.SpecificNeeds.minorhead",                                     
+  "monit.SpecificNeeds.victimsurvivor"
+)
+
+```
+
+## Set up sdcMicro object
+
+```{r message=FALSE, comment = ""}
+
+frame_sdc_obj <- createSdcObj( dat = MainDataFrame2,
+                               hhId = "submission_id",
+                               keyVars = key_variables,
+                               weightVar = "weight"
+                            )
+
+```
+
+
+
+## Applying Data Anonymisation treatment
+
+```{r message=FALSE, comment = ""}
+# Local suppression to obtain k-anonymity
+frame_sdc_obj_3 <- kAnon(frame_sdc_obj, importance=NULL, combs=NULL, k=c(3))
+
+```
+
+
+
+```{r message=FALSE, comment = ""}
+print(frame_sdc_obj_3, type = "recode")
+```
+
+```{r message=FALSE, comment = ""}
+print(frame_sdc_obj_3, type = "ls")
+
+```
+
+## spliting and saving anonymised data per country
+
+```{r message=FALSE, warning=FALSE, comment= ""}
+
+# get anonymized dataset
+MainDataFrame_anonymized <- extractManipData(frame_sdc_obj_3)
+
+```
+
+
+
+```{r message=FALSE, comment = ""}
+for (i in 1:nrow(ctry)) {
+  ctryfilter <- as.character(ctry[ i , 1])
+  MainDataFramesplit <- MainDataFrame_anonymized[MainDataFrame_anonymized$monit.progres_CountryofAsylum == ctryfilter,  ]
+  write.csv(MainDataFramesplit, paste0(mainDirroot,"/data/MainDataFrame-",ctryfilter,"-anonymised.csv"), row.names = FALSE)
+}
+
+```
+
+
