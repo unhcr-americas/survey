@@ -9,7 +9,7 @@ kobo_crunching_report(form, output = "pptx")
 
 ctry <- as.data.frame( c("Argentina", "Chile","Ecuador", "Peru", "Guatemala",  "RepublicaDominicana"))
 
-ctry <- as.data.frame( c( "Guatemala"))
+#ctry <- as.data.frame( c( "Guatemala"))
 ## english
 for (i in 1:nrow(ctry)) {
   # i <- 1

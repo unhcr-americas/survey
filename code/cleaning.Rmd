@@ -24,26 +24,73 @@ output:
 # Data Cleaning Review
 
 ```{r loaddata, message=FALSE, warning=FALSE}
-library(readr)
-library(readxl)
-library(dplyr)
-library(stringr)
-library(scales)
-library(classInt)
-library(ggplot2)
-library(ggrepel)
+library("readr")
+library("readxl")
+library("dplyr")
+library("stringr")
+library("scales")
+library("classInt")
+library("ggplot2")
+library("ggrepel")
+library("tidyverse")
+library("sf")
+library("rmapshaper")
+library("geojsonio")
+library("geojsonR")
+library("rgdal")
+library("readxl")
+library("spdplyr")
+library("lawn")
+library("ggspatial")
+library("ggpubr")
+library("gridExtra")
+
 
 mainDir <- getwd()
 mainDirroot <- substring(mainDir, 0 , nchar(mainDir) - 5)
 MainDataFrame <- read_delim(paste0(mainDirroot,"/data/MainDataFrame_raw.csv"),";", escape_double = FALSE, col_types = cols(today = col_date(format = "%Y-%m-%d")), trim_ws = TRUE)
 ```
 
-
 ## Counting initial # of Records
 
 ```{r message=FALSE, comment = ""}
 nrow(MainDataFrame)
 ```
+
+## Merging data from the Guatemala dataset
+
+```{r message=FALSE, comment = ""}
+MainDataFrameGUA <- read_delim(paste0(mainDirroot,"/data/MainDataFrame_raw_Guatemala.csv"),";", escape_double = FALSE, col_types = cols(today = col_date(format = "%Y-%m-%d")), trim_ws = TRUE)
+
+## Mapping variables name between 2  dataset
+labelGUA <- as.data.frame(names(MainDataFrameGUA))
+names(labelGUA)[1] <- "names"
+labelGUA$idgua <- row.names(labelGUA)
+labelall <- as.data.frame(names(MainDataFrame))
+names(labelall)[1] <- "names"
+labelall$idall <- row.names(labelall)
+
+# Adding the missing variable from main to guatemala
+labelall2 <- left_join(x = labelall , y = labelGUA, by = "names")
+labeltoaddGUA <- labelall2[which(is.na(labelall2$idgua)), c("names")]
+labeltoaddGUA
+MainDataFrameGUA2 <- cbind(MainDataFrameGUA, setNames( lapply(labeltoaddGUA, function(x) x=NA), labeltoaddGUA) )
+
+
+# Adding the missing variable from  guatemala to main 
+labelall1 <- left_join(x =  labelGUA , y =labelall, by = "names")
+labeltoaddMain <- labelall1[which(is.na(labelall1$idall)), c("names")]
+labeltoaddMain
+MainDataFrame2 <- cbind(MainDataFrame, setNames( lapply(labeltoaddMain, function(x) x=NA), labeltoaddMain) )
+
+# Now bind
+MainDataFrame <- rbind(MainDataFrameGUA2[ , names(MainDataFrame2)], 
+                        MainDataFrame2[ , names(MainDataFrame2)])
+nrow(MainDataFrame)
+```
+
+
+
 
 
 ## Remove incomplete records
@@ -60,8 +107,12 @@ nrow(MainDataFrame)
 ```{r message=FALSE, comment = ""}
 
 ## Look at all country
-#table(MainDataFrame$monit.progres_CountryofAsylum, useNA = "ifany")
+table(MainDataFrame$monit.progres_CountryofAsylum, useNA = "ifany")
 #######
+```
+
+```{r message=FALSE, comment = ""}
+
 ctry <- as.data.frame(levels(as.factor(MainDataFrame$monit.progres_CountryofAsylum)))
 names(ctry) <- "country"
 
@@ -71,7 +122,7 @@ ctry <- as.data.frame(ctry[ ctry$country %in% c("Argentina",
                                                 #  "Belize",
                                                 "Chile",
                                                 "Ecuador",
-                                                # "Guatemala",
+                                                "Guatemala",
                                                 #  "notsaid",
                                                 # "Panama",
                                                 "Peru",
@@ -113,8 +164,9 @@ nrow(MainDataFrame)
 ## Remove if not crossed a border
 
 ```{r message=FALSE, comment = ""}
-MainDataFrame <- MainDataFrame[ which(MainDataFrame$monit.crossedborder == "yes")  ,  ]
+#MainDataFrame <- MainDataFrame[ which(MainDataFrame$monit.crossedborder == "yes")  ,  ]
 nrow(MainDataFrame)
+table(MainDataFrame$monit.progres_CountryofAsylum, useNA = "ifany")
 
 ```
 
@@ -166,8 +218,50 @@ head(MainDataFrame[ MainDataFrame$Departbeforearrived == "No" ,c( "monit.ArriveH
                        )], 10)
 MainDataFrame <- MainDataFrame[ which(MainDataFrame$Departbeforearrived == "Yes")  ,  ]
 
+table(MainDataFrame$monit.progres_CountryofAsylum, useNA = "ifany")
 nrow(MainDataFrame)
 ```
+
+## Fill admin 1 based on gps location
+
+
+```{r message=FALSE, comment = ""}
+
+#table(MainDataFrame$monit.progres_CoAadmin1, MainDataFrame$monit.shareloc, useNA = "ifany")
+
+gps <- MainDataFrame[ MainDataFrame$monit.shareloc == "yes", c( "location"  ,
+                                                                "monit._location_latitude" , 
+                                                                "monit._location_longitude", "_uuid" )]
+## Ceate a spatial object using coordinates
+gps2 <- st_as_sf(gps, coords = c("monit._location_longitude","monit._location_latitude" ), crs = 4326)
+
+## Saving to geojson to review in case
+#gps_json <- geojsonio::geojson_json(gps2)
+#geojsonio::geojson_write(gps_json, file = paste0(mainDirroot,"/data/gps_json.geojson"))
+
+rgn = read_sf( dsn = paste0(mainDirroot,"/data/Americas_Admin1"), "Americas_admin1")
+## Change to same projection system before join
+rgn1 <- st_transform(rgn, crs =  4326)
+
+joined2 <- st_join(gps2, rgn1, join = st_intersects)
+joined2$geometry <- NULL
+joined2$location <- NULL
+
+MainDataFrame <- dplyr::left_join( x= MainDataFrame, y = joined2 , by = "_uuid")
+
+MainDataFrame$monit.progres_CoAadmin1 <- ifelse( is.na(MainDataFrame$monit.progres_CoAadmin1), 
+                                                 paste0(MainDataFrame$pcode), 
+                                                 paste0(MainDataFrame$monit.progres_CoAadmin1))
+
+table(MainDataFrame$pcode, MainDataFrame$monit.shareloc, useNA = "ifany")
+MainDataFrame$pcode <- NULL
+
+
+table(MainDataFrame$monit.progres_CoAadmin1, MainDataFrame$monit.shareloc, useNA = "ifany")
+table(MainDataFrame$monit.progres_CountryofAsylum, useNA = "ifany")
+```
+
+
 
 # Household size calculation
 
@@ -207,14 +301,6 @@ nrow(MainDataFrame)
 #                       "monit.a.couldwork"   
 #                       )])
 
-# Calculation check – checkminor – review the flag in raw data
-#  the sum of adults and children is 560 while the total number of people in the HHs is 557
-# The sum of boys and girls does not add up. 
-# Check potential for error in the total # of girls and boys.  
-# When adding up the age groups for girls, we get a total of 120 girls while the real number is 116. 
-# This could be due to mistakes while filling up the questionnaire. 
-# Worth reviewing. When adding up the age groups for boys, the total is 117 but should be 122.  
-# Overall, it is important to check the sequence/flags/totals of men, women, girls and boys
 
 ```
 
@@ -289,24 +375,10 @@ MainDataFrame <- MainDataFrame[ which(MainDataFrame$adultmatching == "Yes" &
                                        MainDataFrame$minortmatching == "Yes" ), ]
 
 nrow(MainDataFrame)
+table(MainDataFrame$monit.progres_CountryofAsylum, useNA = "ifany")
 
 ```
 
-## Filling admin 1 based on coordinates
-
-For those who shared precise location
-
-```{r message=FALSE, comment = ""}
-
-#monit.progres_CoAadmin1
-# "monit.shareloc"                                                    
-# "location"                                                          
-# "monit._location_latitude"                                          
-# "monit._location_longitude" 
-
-
-
-```
 
 
 
@@ -363,8 +435,6 @@ same issue on other..
 MainDataFrame$monit.docResidence[ (is.na(MainDataFrame$monit.docResidence)  )] <- "other"
 table(MainDataFrame$monit.docResidence, MainDataFrame$monit.progres_CountryofAsylum, useNA = "ifany")   
 
-# Specific types of permits for Peru are not appearing in the dataset. Although we understand the categories,
-# if you are going to create categories for multiple countries, it would be important to put what is equivalent to what in an annex in the SOP.
 
 ```
 
@@ -374,13 +444,11 @@ table(MainDataFrame$monit.docResidence, MainDataFrame$monit.progres_CountryofAsy
 Many other there as well!
  
 ```{r message=FALSE, comment = ""} 
-# Question 9/16:SocialBenefit
-
 MainDataFrame$VulnerabilityScoring.CopingCapacity.SocialBenefit[ (is.na(MainDataFrame$VulnerabilityScoring.CopingCapacity.SocialBenefit)  )] <- "other"
 table(MainDataFrame$VulnerabilityScoring.CopingCapacity.SocialBenefit, MainDataFrame$monit.progres_CountryofAsylum, useNA = "ifany") 
 
 #table(MainDataFrame$VulnerabilityScoring.CopingCapacity.SocialBenefit, useNA = "ifany")
-# <NA>    151 
+
 ```
 
 ## Question on coping mechanisms
@@ -388,7 +456,7 @@ table(MainDataFrame$VulnerabilityScoring.CopingCapacity.SocialBenefit, MainDataF
 ```{r message=FALSE, comment = ""}
 # Question on coping mechanisms: only 123 out of 127 answers. This question was mandatory
 #table(MainDataFrame$VulnerabilityScoring.CopingCapacity.CopingMechanism, useNA = "ifany")
-## <NA> 147
+
 
 MainDataFrame$VulnerabilityScoring.CopingCapacity.CopingMechanism[ (is.na(MainDataFrame$VulnerabilityScoring.CopingCapacity.CopingMechanism)  )] <- "other"
 #table(MainDataFrame$VulnerabilityScoring.CopingCapacity.CopingMechanism, MainDataFrame$monit.progres_CountryofAsylum, useNA = "ifany") 
@@ -465,6 +533,8 @@ table(MainDataFrame$monit.progres_CountryofAsylum, MainDataFrame$final.accessq, 
 ## Saving cleaned data per country
 
 ```{r message=FALSE, comment = ""}
+write.csv(MainDataFrame, paste0(mainDirroot,"/data/MainDataFrame-cleaned.csv"), row.names = FALSE)
+
 for (i in 1:nrow(ctry)) {
   ctryfilter <- as.character(ctry[ i , 1])
   MainDataFramesplit <- MainDataFrame[MainDataFrame$monit.progres_CountryofAsylum == ctryfilter,  ]
@@ -497,7 +567,7 @@ MainDataFrame <- mutate(MainDataFrame,
                           #country == "colombia" ~ (2181002 / avg_hh_size) / n_records, 
                           #country == "costa_rica" ~ (114304 / avg_hh_size) / n_records,
                           country == "Ecuador" ~ (453694 / avg_hh_size) / n_records,
-                          #country == "guatemala" ~ (111648 / avg_hh_size) / n_records,
+                          country == "Guatemala" ~ (111648 / avg_hh_size) / n_records,
                           #country == "honduras" ~ (6186 / avg_hh_size) / n_records,
                           #country == "panama" ~ (136007 / avg_hh_size) / n_records,
                           country == "Peru" ~ (867821 / avg_hh_size) / n_records,
@@ -648,38 +718,38 @@ MainDataFrame2 <- select(MainDataFrame, - all_of(variables_to_remove))
 key_variables <- c(
 
   "monit.nationality",                                                 
- "monit.progres_CountryofAsylum", 
-"monit.progres_CoAadmin1" ,
+  "monit.progres_CountryofAsylum", 
+  "monit.progres_CoAadmin1" ,
 
-  "monit.TimeDeparted",                                                
-  "monit.TimeStayHere",                                                
-  "monit.checktimediff",  
+ # "monit.TimeDeparted",                                                
+ # "monit.TimeStayHere",                                                
+#  "monit.checktimediff",  
   
   
-  "monit.progres_groupsize" ,                                          
-  "monit.a.progres_TotalAdult",                                        
-  "monit.a.progres_TotalAdultFemale",                                  
-  "monit.a.progres_TotalAdultMale",                                    
-  "monit.a.progres_totaladultfemale1859",                              
-  "monit.a.progres_totaladultfemale60",                                
-  "monit.a.progres_totaladultmale1859",                                
-  "monit.a.progres_totaladultmale60",                                 
-  "monit.a.progres_TotalMinor",                                        
-  "monit.a.progres_TotalMinorFemale",                                  
-  "monit.a.progres_TotalMinorMale",                                    
-  "monit.a.progres_totalminorfemale04",                                
-  "monit.a.progres_totalminorfemale511",                               
-  "monit.a.progres_totalminorfemale1214",                              
-  "monit.a.progres_totalminorfemale1517",                              
-  "monit.a.progres_totalminormale04",                                  
-  "monit.a.progres_totalminormale511",                                 
-  "monit.a.progres_totalminormale1214",                                
-  "monit.a.progres_totalminormale1517", 
+  # "monit.progres_groupsize" ,                                          
+  # "monit.a.progres_TotalAdult",                                        
+  # "monit.a.progres_TotalAdultFemale",                                  
+  # "monit.a.progres_TotalAdultMale",                                    
+  # "monit.a.progres_totaladultfemale1859",                              
+  # "monit.a.progres_totaladultfemale60",                                
+  # "monit.a.progres_totaladultmale1859",                                
+  # "monit.a.progres_totaladultmale60",                                 
+  # "monit.a.progres_TotalMinor",                                        
+  # "monit.a.progres_TotalMinorFemale",                                  
+  # "monit.a.progres_TotalMinorMale",                                    
+  # "monit.a.progres_totalminorfemale04",                                
+  # "monit.a.progres_totalminorfemale511",                               
+  # "monit.a.progres_totalminorfemale1214",                              
+  # "monit.a.progres_totalminorfemale1517",                              
+  # "monit.a.progres_totalminormale04",                                  
+  # "monit.a.progres_totalminormale511",                                 
+  # "monit.a.progres_totalminormale1214",                                
+  # "monit.a.progres_totalminormale1517", 
  
   "monit.householdLeftbehind",
   "monit.prevdeport" ,
   
-    "monit.intentionspctr" ,                                             
+  "monit.intentionspctr" ,                                             
   "monit.intentionsptown" ,
   "monit.SpecificNeeds" ,                                              
   "monit.SpecificNeeds.disability",                                    
@@ -728,18 +798,127 @@ print(frame_sdc_obj_3, type = "ls")
 
 ```
 
-## spliting and saving anonymised data per country
+```{r }
+
+riskglobal <- round(frame_sdc_obj@risk$global$risk_pct , 2) 
+riskglobalh <- round(frame_sdc_obj_3@risk$global$risk_pct , 2)
+```
+
+Based on the intrusion scenario, the global risk (i.e. the expected number of re-identifications) is __`r riskglobal`%__ before anonymization treatment, and  __`r riskglobalh`%__ after anonymization treatment. 
+
+
+We can also visualize Individual risk:
+
+```{r }
+
+risksum <- as.data.frame(frame_sdc_obj@risk$individual[, "risk"])
+names(risksum)[1] <- "indrisk"
+risksum$class.fixed <- as.factor(classInt::findCols(classIntervals(risksum$indrisk, n = 8, style = "fixed", fixedBreaks = c(0, 0.001, 0.01, 0.5, 0.1, 0.15, 0.30, 0.5, 1))))
+
+risksum$class.fixed.name <- recode_factor(risksum$class.fixed, `1` = "Individual Risk is lower than 0.1%",
+                                          `2` = "Individual Risk is higher than 0.1% and lower than 1%",
+                                     `3` = "Individual Risk is higher than 1% and lower than 5%",
+                                      `4` = "Individual Risk is higher than 5% and lower than 10%",
+                                     `5` = "Individual Risk is higher than 10% and lower than 15%",
+                                     `6` = "Individual Risk is higher than 15% and lower than 30%",
+                                     `7` = "Individual Risk is higher than 30% and lower than 50%",
+                                     `8` = "Individual Risk is higher than 50% and lower than 100%")
+risksum$class.fixed.name <- factor(risksum$class.fixed.name, 
+                                   levels = c("Individual Risk is lower than 0.1%",
+                                               "Individual Risk is higher than 0.1% and lower than 1%",
+                                               "Individual Risk is higher than 1% and lower than 5%",
+                                               "Individual Risk is higher than 5% and lower than 10%",
+                                                "Individual Risk is higher than 10% and lower than 15%",
+                                               "Individual Risk is higher than 15% and lower than 30%",
+                                               "Individual Risk is higher than 30% and lower than 50%",
+                                               "Individual Risk is higher than 50% and lower than 100%"))
+risksum2 <- as.data.frame(cbind(table(risksum$class.fixed.name ), prop.table(table(risksum$class.fixed.name ))))
+risksum2$class.fixed.name <- row.names(risksum2) 
+risksum2$class.fixed.name <- factor(risksum2$class.fixed.name, 
+                                    levels = c( "Individual Risk is higher than 50% and lower than 100%",
+                                                "Individual Risk is higher than 30% and lower than 50%",
+                                                "Individual Risk is higher than 15% and lower than 30%",
+                                                "Individual Risk is higher than 10% and lower than 15%",
+                                                "Individual Risk is higher than 5% and lower than 10%",
+                                                "Individual Risk is higher than 1% and lower than 5%",
+                                                "Individual Risk is higher than 0.1% and lower than 1%",
+                                                "Individual Risk is lower than 0.1%"))
+risksum2$percentreponse <- paste0(round(risksum2$V2*100,digits = 1),"%")
+
+risksum2$scenario <- "1.Before treatment"
+
+risksumall <- risksum2
+
+risksum <- as.data.frame(frame_sdc_obj_3@risk$individual[, "risk"])
+names(risksum)[1] <- "indrisk"
+risksum$class.fixed <- as.factor(classInt::findCols(classIntervals(risksum$indrisk, n = 8, style = "fixed", fixedBreaks = c(0, 0.001, 0.01, 0.5, 0.1, 0.15, 0.30, 0.5, 1))))
+
+risksum$class.fixed.name <- recode_factor(risksum$class.fixed, `1` = "Individual Risk is lower than 0.1%",
+                                          `2` = "Individual Risk is higher than 0.1% and lower than 1%",
+                                     `3` = "Individual Risk is higher than 1% and lower than 5%",
+                                      `4` = "Individual Risk is higher than 5% and lower than 10%",
+                                     `5` = "Individual Risk is higher than 10% and lower than 15%",
+                                     `6` = "Individual Risk is higher than 15% and lower than 30%",
+                                     `7` = "Individual Risk is higher than 30% and lower than 50%",
+                                     `8` = "Individual Risk is higher than 50% and lower than 100%")
+risksum$class.fixed.name <- factor(risksum$class.fixed.name, levels = c("Individual Risk is lower than 0.1%",
+                                               "Individual Risk is higher than 0.1% and lower than 1%",
+                                               "Individual Risk is higher than 1% and lower than 5%",
+                                               "Individual Risk is higher than 5% and lower than 10%",
+                                                "Individual Risk is higher than 10% and lower than 15%",
+                                               "Individual Risk is higher than 15% and lower than 30%",
+                                               "Individual Risk is higher than 30% and lower than 50%",
+                                               "Individual Risk is higher than 50% and lower than 100%"))
+risksum2 <- as.data.frame(cbind(table(risksum$class.fixed.name ), prop.table(table(risksum$class.fixed.name ))))
+risksum2$class.fixed.name <- row.names(risksum2) 
+risksum2$class.fixed.name <- factor(risksum2$class.fixed.name, levels = c(
+  "Individual Risk is higher than 50% and lower than 100%",
+  "Individual Risk is higher than 30% and lower than 50%",
+  "Individual Risk is higher than 15% and lower than 30%",
+  "Individual Risk is higher than 10% and lower than 15%",
+  "Individual Risk is higher than 5% and lower than 10%",
+  "Individual Risk is higher than 1% and lower than 5%",
+  "Individual Risk is higher than 0.1% and lower than 1%",
+  "Individual Risk is lower than 0.1%"))
+risksum2$percentreponse <- paste0(round(risksum2$V2*100,digits = 1),"%")
+
+risksum2$scenario <- "2.After treatment"
+
+risksumall <- rbind(risksumall, risksum2)
+
+## and now the graph
+ggplot(risksumall, aes(x = class.fixed.name, y = V1)) +
+geom_bar(fill = "#2a87c8",colour = "#2a87c8", stat = "identity", width = .8) +
+guides(fill = FALSE) +
+facet_wrap(vars(scenario), nrow = 1) +
+geom_label_repel(aes(y = V1, label = percentreponse), fill = "#2a87c8", color = 'white') +
+ylab("") +
+xlab("") +
+coord_flip() +
+ggtitle("Number of Observation broken down per individual disclosure risk level") +
+theme(plot.title = element_text(face = "bold", size = 9 ),
+plot.background = element_rect(fill = "transparent",colour = NA))
+```
+
+
+## Saving anonymised data per country
 
 ```{r message=FALSE, warning=FALSE, comment= ""}
 
 # get anonymized dataset
 MainDataFrame_anonymized <- extractManipData(frame_sdc_obj_3)
+# save reports
+report(obj=frame_sdc_obj_3, outdir= paste0(mainDirroot,"/out/anonimization_reports") , filename ="Anonimization_report", title="SDC-Report", internal=TRUE)
 
 ```
 
 
 
+
+
 ```{r message=FALSE, comment = ""}
+write.csv(MainDataFrame, paste0(mainDirroot,"/data/MainDataFrame-anonymised.csv"), row.names = FALSE)
+
 for (i in 1:nrow(ctry)) {
   ctryfilter <- as.character(ctry[ i , 1])
   MainDataFramesplit <- MainDataFrame_anonymized[MainDataFrame_anonymized$monit.progres_CountryofAsylum == ctryfilter,  ]
